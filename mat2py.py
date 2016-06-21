@@ -4,46 +4,47 @@ import h5py
 import os
 import sys 
 
-# mat2py imports a parameter from a MATLAB struct and returns it as a ndarray 
-# mfile the struct's name e.g. (test.mat)
-# p is the desired parameter e.g. (y_pstd)
-
-def mat2py(mfile,p):
+def mat2py(mfile, a, b):
 
 
 # Finds mfile's path if it's in current dir
 	mfilepath = os.path.abspath(mfile);
 
 # Imports the MATLAB struct and retrieves tracks (HP5 group type)
-	f = h5py.File(mfile); 
-	gp1 = f.get('tracks');
+	f = h5py.File(mfile,'r')
+	gp1 = f.get('tracks')
 
-# data is a list of ndarrays for every track of specified parameter p
-	data = [gp1[element[0]][:] for element in gp1[p]];
-	#t = len(gp1.get('t'));
-	#data.append(gp1[element[t]][:] for element in gp1['t'])
+	params = [a,b]
 
-# arr is an ndarray of ndarrays 
-	arr = np.array(data);
-	return arr;
+	for p in params:
+		# data is a list of ndarrays for every track of specified parameter p[i]
+		data = [gp1[element[0]][:] for element in gp1[p]]
+		if p == params[0]: 
+			arr = data
+		else:
+			arr = np.hstack((arr,data))
+
+	arr = np.squeeze(arr)
+
+	train = []
+	test = []
+	i = 0
+	while i < len(arr):
+		test.append(arr[i])
+		if arr[i,0] != 0.:
+			train.append(arr[i])
+		#else:
+			#test.append(arr[i])
+		i = i+1
+	
+	train = np.array(train)
+	test = np.array(test)
+	print ('HIHIIIH', len(test))
+	
+	f.close()	
+	print ('Success!')
+	return train, test 
+
 
 if __name__ == "__main__": 
-	mat2py(sys.argv[1], sys.argv[2]);
-
-
-
-
-# EXTRA STUFF # 
-# Finds mfile's path, if you don't know where it is
-	# for r,d,f in os.walk("C:\\"):
- #    	for files in f:
- #        	 if files == mfile:
- #              	mfilepath == os.path.join(r,files)
-
-
-# Retrieves list of parameter names for reference 
-# (Not super necessary but nice to have)
-	# param = [];
-	# for item in gp1.keys():
-	# 	param = param + [item];
-
+	mat2py(sys.argv[1], sys.argv[2], sys.argv[3]);
