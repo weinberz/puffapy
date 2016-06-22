@@ -12,12 +12,12 @@ import scipy.io as sio
 
 def mat2py(mfile, params):
 # Finds mfile's path if it's in current dir
-	mfilepath = os.path.abspath(mfile);
+	mfilepath = os.path.abspath(mfile)
 
 	# Imports the MATLAB struct and retrieves tracks (HP5 group type)
 	try:
 		# Imports the MATLAB struct and retrieves tracks (HP5 group type)
-		f = h5py.File(mfile,'r')
+		f = h5py.File(mfilepath,'r')
 		gp1 = f.get('tracks')
 
 		for p in params:
@@ -32,34 +32,29 @@ def mat2py(mfile, params):
 
 		train = []
 		test = []
-		i = 0
-		while i < len(arr):
-			test.append(arr[i])
-			if arr[i,0] != 0.:
-				train.append(arr[i])
-			#else:
-				#test.append(arr[i])
-			i = i+1
+		#(TODO) This currently assumes that the first param passed is always isPuff
+		# and sorts between train and test arrays based on that.
+		for feature in arr:
+			test.append(feature)
+			if feature[0] != 0.:
+				train.append(feature)
 
 		train = np.array(train)
 		test = np.array(test)
 		print ('HIHIIIH', len(test))
 
-		f.close()
+
 		print ('Success!')
+		f.close()
 		return train, test
 
 	except OSError:
 		print("Woops, old matlab format. This will fail.")
-
-	# arr is an ndarray of ndarrays
-	arr = np.array(data);
-
-	return arr;
+		return
 
 if __name__ == "__main__":
 	parser = argparse.ArgumentParser(description="Convert .mat files to numpy arrays for use with randomforest.py")
 	parser.add_argument("matfile", help="The file to be parsed")
 	parser.add_argument("fields", nargs="+", help="Field(s) to extract from .mat file")
 	args = parser.parse_args()
-	mat2py(args.matfile,args.fields);
+	mat2py(args.matfile, args.fields);
