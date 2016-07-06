@@ -6,21 +6,14 @@ from sklearn.ensemble import RandomForestClassifier
 import argparse
 from mpl_toolkits.mplot3d import Axes3D
 import matplotlib.pyplot as plt
-from sklearn import cross_validation
+from sklearn.externals import joblib
+import os.path
 
-def runRandomForests(train,test):
+# Assumes first parameter passed is always the target variable 
+# and sorts between train and test arrays based on that
+def runRandomForests(train,test, RFfile, params):
 
-	# #(TODO) This currently assumes that the first param passed is always isPuff
-	# # and sorts between train and test arrays based on that
-
-	# trainArr = []
-	# trainRes = []
-	# testArr = []
-	# #print ('train', train)
-	# #print('test', test)
-	# for feature in train:
-	# 	if feature[0] != 0:
-	# 		trainArr.append(feature)
+	# Add the track to training data train_tracks if its been scored 
 	train_tracks = []
 	for feature in train: 
 		if feature[0] != 0.: 
@@ -29,131 +22,111 @@ def runRandomForests(train,test):
 	train_tracks = np.array(train_tracks)
 	test_tracks = np.array(test)
 
-	trainRes = train_tracks[:,0]
+	# Contains parameter values for all tracks part of training data
 	trainArr = train_tracks[:,1:]
+
+	# Contains target variables for all tracks part of training data 
+	trainRes = train_tracks[:,0]
+
+	# Contains parameter values for all tracks part of test data
+	# Test data contains the tracks used for training 
 	testArr = test_tracks[:,1:]
 
+	# Convert all NaNs to 0 for RF to work properly 
 	trainArr = np.nan_to_num(trainArr)
 	trainRes = np.nan_to_num(trainRes)
 	testArr = np.nan_to_num(testArr)
 
-	rf = RandomForestClassifier(n_estimators = 500)
-	# scores = cross_validation.cross_val_score(rf, trainArr, trainRes, cv = 10)
-	# print ('mean score', scores)
-	rf.fit(trainArr, trainRes)
+	if os.path.isfile(RFfile) == False:
+		# Train the classifier and use it to predict the target variables of test data 
+		rf = RandomForestClassifier(n_estimators = 500, oob_score = True)
+		rf.fit(trainArr, trainRes)
+
+		# Save the classifier as RFfile
+		joblib.dump(rf, RFfile, compress=True)
+
+	else: 
+		# Load the classifier 
+		rf = joblib.load(RFfile)
 
 	testRes = rf.predict(testArr)
 
-	#Split classification results into lists with track indices and respective data
-	# *Need to make plotting options customizable
-	i = 0
-	puffs = []
-	puffs_x = []
-	puffs_y = []
-	puffs_z = []
-	nonpuffs = []
-	nonpuffs_x = []
-	nonpuffs_y = []
-	nonpuffs_z = []
-	maybe = []
-	maybe_x = []
-	maybe_y = []
-	maybe_z = []
+	nparams = testArr.shape[1]
+	puffs = [[] for _ in range(nparams+1)]
+	nonpuffs = [[] for _ in range(nparams+1)]
+	maybe = [[] for _ in range(nparams+1)]
+
+	# For each class, 
+	# class[1] is a list of track indices classified as that class
+	# class[2],[3],[4] (...) are that track's 1st, 2nd and 3rd (...) parameter values by default 
+
+	i=0
 	for res in testRes:
 		if res == 2: 
-			nonpuffs.append(i)
-			nonpuffs_x.append(testArr[i,0]) 
-			nonpuffs_y.append(testArr[i,1])
-			nonpuffs_z.append(testArr[i,2])
+			nonpuffs[0].append(i)
+			j = 1
+			while j <= nparams:
+				nonpuffs[j].append(testArr[i,j-1])
+				j = j+1 
 		elif res == 1:
-			puffs.append(i) 
-			puffs_x.append(testArr[i,0]) 
-			puffs_y.append(testArr[i,1]) 
-			puffs_z.append(testArr[i,2]) 
+			puffs[0].append(i) 
+			j = 1
+			while j <= nparams:
+				puffs[j].append(testArr[i,j-1]) 
+				j=j+1
 		else:
-			maybe.append(i)
-			maybe_x.append(testArr[i,0]) 
-			maybe_y.append(testArr[i,1])
-			maybe_z.append(testArr[i,2])
+			maybe[0].append(i)
+			j = 1
+			while j <= nparams:
+				maybe[j].append(testArr[i,j-1]) 
+				j=j+1
 		i = i+1
 	
-	#Plot in 3D
-	fig = plt.figure()
-	ax = fig.add_subplot(111,projection='3d')
-	for c, m, xs, ys, zs in [('r','o', puffs_x,puffs_y,puffs_z), 
-	('c', 'o', nonpuffs_x, nonpuffs_y,nonpuffs_z),
-	('g', 'o', maybe_x, maybe_y,maybe_z)]: 
-		ax.scatter(xs,ys,zs,c=c, marker = m)
+	# Create a dictionary of the track indices (1 indexing) for each label
+	nonp= [x+1 for x in nonpuffs[0]]
+	p= [x+1 for x in puffs[0]]
+	m= [x+1 for x in maybe[0]]
 
-	#*Needs to be customizable
-	ax.set_xlabel('pallAdiff')
-	ax.set_ylabel('pfallR2')
-	ax.set_zlabel('pip')
-	plt.savefig('C:\\Users\\tiffany\\Downloads\\fig3d.jpg')
-	plt.show()
+	labels = ['nonpuffs', 'puffs', 'maybe']
+	ID = [nonp,p,m]
+	idx = dict(zip(labels, ID))
 
-# 	i = 0
-# 	puffs = []
-# 	puffs_x = []
-# 	puffs_y = []
-# 	puffs_z = []
-# 	nonpuffs = []
-# 	nonpuffs_x = []
-# 	nonpuffs_y = []
-# 	nonpuffs_z = []
-# 	maybe = []
-# 	maybe_x = []
-# 	maybe_y = []
-# 	maybe_z = []
-# 	for res in testRes:
-# 		if res == 2: 
-# 			nonpuffs.append(i)
-# 			nonpuffs_x.append(testArr[i,1]) 
-# 			nonpuffs_y.append(testArr[i,0])
-# 			nonpuffs_z.append(testArr[i,3])
-# 		elif res == 1:
-# 			puffs.append(i) 
-# 			puffs_x.append(testArr[i,1]) 
-# 			puffs_y.append(testArr[i,0]) 
-# 			puffs_z.append(testArr[i,3]) 
-# 		else:
-# 			maybe.append(i)
-# 			maybe_x.append(testArr[i,1]) 
-# 			maybe_y.append(testArr[i,0])
-# 			maybe_z.append(testArr[i,3])
-# 		i = i+1
-# #Plot 2D
-# 	plt.plot(nonpuffs_x, nonpuffs_y, 'c.', label = 'Nonpuffs')
-# 	plt.plot(puffs_x, puffs_y,'r.', label = 'Puffs') 
-# 	plt.plot(maybe_x, maybe_y, 'g.', label = 'Maybe')
-# 	plt.xlabel('posthoc nDiff')
-# 	plt.ylabel('# prom. peaks')
-# 	plt.title('3 Parameter Model RF')
-# 	plt.legend()
-# 	#plt.savefig('C:\\Users\\tiffany\\Downloads\\fig.jpg')
-# 	plt.show()
-	#return testRes
-	print ("PUFFS \n", puffs)
-	print ("\nNONPUFFS \n", nonpuffs)
-	print ("\nMAYBE \n", maybe)
+	# Save dictionary as a .mat
+	sio.savemat('RFresults', idx)
+
+	return nonpuffs, puffs, maybe, params
+
+	# print ("PUFFS \n", puffs)
+	# print ("\nNONPUFFS \n", nonpuffs)
+	# print ("\nMAYBE \n", maybe)
 
 if __name__ == "__main__": 
 	parser = argparse.ArgumentParser(description='stuff')
-	parser.add_argument("matfile")
-	parser.add_argument("fields", nargs="+", help="Field(s) to extract from .mat file")
-	parser.add_argument("--train_data",dest='training',default=[])
+	parser.add_argument('RFfile')
+	parser.add_argument('training')
+	parser.add_argument('fields', nargs="+", help="Field(s) to extract from .mat file")
+	parser.add_argument('--test_data',dest='testing',default=[])
 	args = parser.parse_args()
 
-	if args.training == []:
-		separate_training = False
+	if args.testing == []:
+		separate_testing = False
 	else: 
-		separate_training = True
+		separate_testing = True
 
-	if separate_training:
-		train = mat2py(args.matfile, args.fields)
-		test = mat2py(args.training, args.fields)
+	if (args.training).endswith('.npy'):
+		train = np.load(args.training)
+		if separate_testing: 
+			test = np.load(args.testing)
+		else: 
+			test = np.array(train)
 	else:
-		train = mat2py(args.matfile, args.fields)
-		test = np.array(train)
+		if len(args.fields) <= 1:
+			raise TypeError('Must import at least two parameters (including target variable) for RF classification')
+		else: 
+			train = mat2py(args.training, args.fields)
+			if separate_testing:
+				test = mat2py(args.testing, args.fields)
+			else:
+				test = np.array(train)
 
-	runRandomForests(train,test)
+	runRandomForests(train,test, args.RFfile, args.fields)
