@@ -11,7 +11,7 @@ from mat2py import mat2py
 
 # Assumes first parameter passed is always the target variable
 # and sorts between train and test arrays based on that
-def runRandomForests(train,test, RFfile, params):
+def runRandomForests(train, test, RFfile):
 
 	# Add the track to training data train_tracks if its been scored
 	train_tracks = []
@@ -51,10 +51,10 @@ def runRandomForests(train,test, RFfile, params):
 
 	testRes = rf.predict(testArr)
 
-	nparams = testArr.shape[1]
-	puffs = [[] for _ in range(nparams+1)]
-	nonpuffs = [[] for _ in range(nparams+1)]
-	maybe = [[] for _ in range(nparams+1)]
+	nparams = np.zeros((testArr.shape[1]))
+	puffs = [[] for _ in range(len(nparams)+1)]
+	nonpuffs = [[] for _ in range(len(nparams)+1)]
+	maybe = [[] for _ in range(len(nparams)+1)]
 
 	# For each class,
 	# class[1] is a list of track indices classified as that class
@@ -64,15 +64,15 @@ def runRandomForests(train,test, RFfile, params):
 		if res == 2:
 			nonpuffs[0].append(i)
 			for j, param in enumerate(nparams):
-				nonpuffs[j].append(testArr[i,j-1])
+				nonpuffs[j+1].append(testArr[i,j])
 		elif res == 1:
 			puffs[0].append(i)
 			for j, param in enumerate(nparams):
-				puffs[j].append(testArr[i,j-1])
+				puffs[j+1].append(testArr[i,j])
 		else:
 			maybe[0].append(i)
 			for j, param in enumerate(nparams):
-				maybe[j].append(testArr[i,j-1])
+				maybe[j+1].append(testArr[i,j])
 
 	# Create a dictionary of the track indices (1 indexing) for each label
 	nonp= [x+1 for x in nonpuffs[0]]
@@ -86,31 +86,25 @@ def runRandomForests(train,test, RFfile, params):
 	# Save dictionary as a .mat
 	sio.savemat('RFresults', idx)
 
-	return nonpuffs, puffs, maybe, params
-
-	# print ("PUFFS \n", puffs)
-	# print ("\nNONPUFFS \n", nonpuffs)
-	# print ("\nMAYBE \n", maybe)
+	return nonpuffs[1:], puffs[1:], maybe[1:]
 
 if __name__ == "__main__":
-	parser = argparse.ArgumentParser(description='stuff')
+	parser = argparse.ArgumentParser(description='Random Forest classification of tracks')
 	parser.add_argument('RFfile', help="Classifier to load or name of file to save classifier in")
 	parser.add_argument('training', help="Numpy array or HDF5-encoded MATLAB file")
-	parser.add_argument('fields', nargs="+", help="Field(s) to extract from .mat file")
-	parser.add_argument('--test_data',dest='testing',default=[])
+	parser.add_argument('--fields', default = [], nargs="+", help="Field(s) to extract from .mat file")
+	parser.add_argument('--test_data', dest='testing',default=[])
 	args = parser.parse_args()
-
-	#YOU MIGHT NEED TO MOVE ME. WHY?
-	if len(args.fields) <= 1:
-		# Because here, we want to check if we're loading a file, and only throw this error if there are no fields in the file we're loading
-		raise ValueError('Must import at least two parameters (including labeled variable) for RF classification')
-		return
-	else:
-		fields = args.fields
 
 	if (args.training).endswith('.npy'):
 		train = np.load(args.training)
+		fields = list(train.dtype.names)
 	else:
+		if not args.fields or len(args.fields) <= 1: 
+			raise ValueError('Must import at least two parameters (including labeled variable) for RF classification')
+			quit()
+		else: 
+			fields = args.fields
 		train = mat2py(args.training, args.fields)
 
 	if args.testing:
@@ -121,4 +115,7 @@ if __name__ == "__main__":
 	else:
 		test = np.array(train)
 
-	runRandomForests(train, test, args.RFfile, args.fields)
+	train = np.array(train.tolist())
+	test = np.array(test.tolist())
+
+	runRandomForests(train, test, args.RFfile)

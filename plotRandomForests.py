@@ -1,14 +1,29 @@
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
+import os 
 
 #nonpuffs, puffs and maybe are the dictionaries returned by runRandomForests.py
 #Populate p2D or p3D with indices of parameters as they were entered on the command line, or as they appear in the dictionary 
-def plotRandomForests(nonpuffs, puffs, maybe, pnames, p2D = [1,2], save2D = '2Dfig.jpg', p3D = [1,2,3], save3D = '3Dfig.jpg'):
+def plotRandomForests(nonpuffs, puffs, maybe, pnames, p2D = [0,1], save2D = '2Dfig.jpg', p3D = [0,1,2], save3D = '3Dfig.jpg'):
 	if len(pnames) < 2:
 		raise ValueError('Cannot plot with less than 2 parameters')
 		return
 	else:
 		# Plots 2D scatter plot
+		if isinstance(p2D[0], str): 
+			for i, pname in enumerate(p2D): 
+				if not pname in pnames: 
+					raise ValueError('Parameter'+ ' \'' + pname + '\' ''does not exist for plotting')
+				else: 
+					p2D[i] = pnames.index(p2D[i])
+	
+		if isinstance(p3D[0], str):  
+			for i,pname in enumerate(p3D): 
+				if not pname in pnames: 
+					raise ValueError('Parameter'+ ' \'' + pname + '\' ''does not exist for plotting')
+				else: 
+					p3D[i] = pnames.index(p3D[i])
+
 		fig = plt.figure()
 		plt.plot(nonpuffs[p2D[0]], nonpuffs[p2D[1]], 'c.', label = 'Nonpuffs')
 		plt.plot(maybe[p2D[0]], maybe[p2D[1]], 'g.', label = 'Maybe')
@@ -17,7 +32,7 @@ def plotRandomForests(nonpuffs, puffs, maybe, pnames, p2D = [1,2], save2D = '2Df
 		plt.ylabel(pnames[p2D[1]])
 		plt.title('2D Scatter Plot for RF Results')
 		plt.legend()
-		plt.savefig('C:\\Users\\tiffany\\Downloads\\'+ save2D)
+		plt.savefig(save2D)
 
 		if len(pnames) > 2:
 			#Plot in 3D
@@ -32,6 +47,8 @@ def plotRandomForests(nonpuffs, puffs, maybe, pnames, p2D = [1,2], save2D = '2Df
 			ax.set_xlabel(pnames[p3D[0]])
 			ax.set_ylabel(pnames[p3D[1]])
 			ax.set_zlabel(pnames[p3D[2]])
-			plt.savefig('C:\\Users\\tiffany\\Downloads\\' + save3D)
+			plt.savefig(save3D)
 
 		plt.show()
+
+
