@@ -1,6 +1,8 @@
 import rpy2
 from rpy2.robjects import numpy2ri
+from rpy2.robjects import pandas2ri
 numpy2ri.activate()
+pandas2ri.activate()
 
 from skimage.draw import circle
 from skimage.restoration import denoise_wavelet
@@ -17,6 +19,7 @@ import pandas as pd
 
 import pims
 import trackpy as tp
+from trackpy.preprocessing import bandpass
 
 from math import sqrt
 import math
@@ -31,17 +34,10 @@ from os.path import basename
 # Generate necessary R functions first
 # R function for fitting a gumbel GLM to the local maxima in blob detection
 # Estimates the gumbel parameters as a function of sigma (for blob) and local background
-rpy2.robjects.r('''
-        suppressMessages(library(VGAM))
-            
-        gev_glm <- function(maxs, sigmas, backgrounds){
-            df <- data.frame(ms = maxs, ss = sigmas, bb = backgrounds)
-            b <- vglm(ms ~ ss*bb, gumbel(lscale = "identitylink"), data=df)
-            return(coef(b, matrix=T))
-        }
-        ''')
+rpy2.robjects.r("source('puff_lib.R')")
 
 gev_glm = rpy2.robjects.globalenv['gev_glm']
+get_pc_scores = rpy2.robjects.globalenv['get_pc_scores']
 
 # The blob_log function calls the helper function _prune_blobs to remove overlapping detected blobs
 # This function is not accessible from the module, so I've just pasted the source code here
@@ -210,7 +206,8 @@ def _find_locs_in_frame(idx_frame, sigma_list, cutoff):
     # the local max values of the laplacian
     idx = idx_frame[0]
     frame = idx_frame[1]
-    frame = denoise_wavelet(frame, multichannel=False)
+    #frame = denoise_wavelet(frame, multichannel=False)
+    frame = bandpass(frame, 1, 15, 1)
     gls = [-gaussian_laplace(frame, sig) * sig **2 for sig in sigma_list]
     plm = [peak_local_max(x) for x in gls]
     plmval = np.concatenate([[gls[i][r, c] for (r, c) in plm[i]] for i in range(len(sigma_list))])
@@ -337,17 +334,29 @@ def intensity_grid(f, puff_events, delta=4):
     delta = 4
     side = 2*delta + 1
     for f_num, xloc, yloc, idx in np.array(puff_events):
+        y_len, x_len = np.shape(f[f_num])
         xloc = int(xloc)
         yloc = int(yloc)
-        try:
-            block = f[f_num][(yloc - delta):(yloc + delta + 1), (xloc - delta):(xloc + delta + 1)]
-        except:
-            block = np.zeros((side,side))
+        
+        # literal edge case detection
+        y_start = (yloc - delta) if (yloc - delta) >= 0 else 0
+        y_end = (yloc + delta + 1) if (yloc + delta) <= y_len else (y_len + 1)
+        x_start = (xloc - delta) if (xloc - delta) >= 0 else 0
+        x_end = (xloc + delta + 1) if (xloc + delta) <= x_len else (x_len + 1)
+        block = f[f_num][y_start:y_end, x_start:x_end]
+        
+        if x_start == 0:
+            block = np.pad(block, ((0,0), ((delta-xloc)+1,0)), mode="reflect")
+        elif x_end == (x_len + 1):
+            block = np.pad(block, ((0,0), (0,delta-(x_len-xloc)+1)), mode="reflect")
+            
+        if y_start == 0:
+            block = np.pad(block, (((delta-yloc)+1,0), (0,0)), mode="reflect")
+        elif y_end == (y_len + 1):
+            block = np.pad(block, ((0,delta-(y_len-yloc)+1), (0,0)), mode="reflect")
+        
         for r,c in product(range(side), repeat=2):
-            try:
-                puff_intensities.append([f_num, c - delta, r - delta, idx, block[r,c]])
-            except:
-                puff_intensities.append([f_num, c - delta, r - delta, idx, 0])
+            puff_intensities.append([f_num, c - delta, r - delta, idx, block[r,c]])
         
     puff_intensities = pd.DataFrame(puff_intensities, columns=['frame', 'x', 'y', 'particle', 'intensity'])
     return puff_intensities
