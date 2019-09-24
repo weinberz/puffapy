@@ -4,6 +4,8 @@ from rpy2.robjects import pandas2ri
 numpy2ri.activate()
 pandas2ri.activate()
 
+import importlib.resources as pkg_resources 
+
 from skimage.draw import circle
 from skimage.restoration import denoise_wavelet
 from skimage.feature import peak_local_max
@@ -19,7 +21,6 @@ import pandas as pd
 
 import pims
 import trackpy as tp
-from trackpy.preprocessing import bandpass
 
 from math import sqrt
 import math
@@ -31,13 +32,15 @@ import xml.etree.ElementTree as ET
 from itertools import product
 from os.path import basename
 
+from tqdm.auto import tqdm
+
 # Generate necessary R functions first
 # R function for fitting a gumbel GLM to the local maxima in blob detection
 # Estimates the gumbel parameters as a function of sigma (for blob) and local background
-rpy2.robjects.r("source('puff_lib.R')")
+with pkg_resources.path('lib', 'detection.R') as filepath:
+    rpy2.robjects.r("source('" + str(filepath) + "')")
 
 gev_glm = rpy2.robjects.globalenv['gev_glm']
-get_pc_scores = rpy2.robjects.globalenv['get_pc_scores']
 
 # The blob_log function calls the helper function _prune_blobs to remove overlapping detected blobs
 # This function is not accessible from the module, so I've just pasted the source code here
@@ -206,8 +209,8 @@ def _find_locs_in_frame(idx_frame, sigma_list, cutoff):
     # the local max values of the laplacian
     idx = idx_frame[0]
     frame = idx_frame[1]
-    #frame = denoise_wavelet(frame, multichannel=False)
-    frame = bandpass(frame, 1, 15, 1)
+    frame = denoise_wavelet(frame, multichannel=False)
+#   frame = bandpass(frame, 1, 15, 1)
     gls = [-gaussian_laplace(frame, sig) * sig **2 for sig in sigma_list]
     plm = [peak_local_max(x) for x in gls]
     plmval = np.concatenate([[gls[i][r, c] for (r, c) in plm[i]] for i in range(len(sigma_list))])
@@ -247,17 +250,17 @@ def _find_locs_in_frame(idx_frame, sigma_list, cutoff):
 # cutoff: the cutoff used to find an intensity threshold
 
 def find_locs(f, max_sigma=3, min_sigma=1, num_sigma=11, cutoff=0.9):
-    
+
     # Generate list of evenly-spaced standard deviations between min_sigma and max_sigma
     scale = np.linspace(0, 1, num_sigma)[:, None]
     sigma_list = scale * (max_sigma - min_sigma) + min_sigma
     sigma_list = sigma_list[:,0]
-    
+
     n_cores = multiprocessing.cpu_count()
     f_with_sigmas = partial(_find_locs_in_frame, sigma_list=sigma_list, cutoff=cutoff)
     with multiprocessing.Pool(3) as pool:
         blobs_out = pool.map(f_with_sigmas, enumerate(f), chunksize=100)
-    
+
     # To do particle tracking across frames, after calling this function you would run the following:
     #
     # events = tp.link_df(locs, search_range=search_range, memory=memory)
@@ -266,10 +269,10 @@ def find_locs(f, max_sigma=3, min_sigma=1, num_sigma=11, cutoff=0.9):
     # for specified values of
     # search_range: restriction on number of pixels the particle can move from frame to frame
     # memory: number of frames the particle can disappear for
-    # track_length_min: minimum number of frames a track must exist for 
-    
+    # track_length_min: minimum number of frames a track must exist for
+
     locs = pd.concat(blobs_out, ignore_index=True)
-    
+
     return locs
 
 
@@ -284,7 +287,7 @@ def import_xml_data(f):
     for m in markers[1]:
         if m.tag == 'Marker':
             marker_coords = marker_coords + [[int(m[0].text), int(m[1].text), int(m[2].text)]]
-    
+
     return marker_coords
 
 
@@ -294,14 +297,14 @@ def import_xml_data(f):
 # loc is a triple of x coord, y coord, frame number
 def filter_df(df, loc, radius=5):
     # match frame, and match (x,y) coords within radius
-    id_list = df[(np.abs(df['frame'] - (loc[2] - 1)) < 1) &  (np.abs(df['x'] - loc[0]) < radius) & 
+    id_list = df[(np.abs(df['frame'] - (loc[2] - 1)) < 1) &  (np.abs(df['x'] - loc[0]) < radius) &
        (np.abs(df['y'] - loc[1]) < radius)]['particle'].tolist()
     if not id_list:
         return - 1
     return id_list[0]
 
 
-# for each event in the movie, add a few frames to the start and end to make sure we're 
+# for each event in the movie, add a few frames to the start and end to make sure we're
 # capturing the full lifetime of the event
 # TODO: Parallelize
 def pad_frames(puff_events, puff_ids, f, num_pad=5):
@@ -312,55 +315,81 @@ def pad_frames(puff_events, puff_ids, f, num_pad=5):
         end_y = puff_events['y'][puff_events['particle'] == idx].tolist()[-1]
         start_frame = puff_events['frame'][puff_events['particle'] == idx].tolist()[0]
         end_frame = puff_events['frame'][puff_events['particle'] == idx].tolist()[-1]
-        
+
         tmp_events = []
-    
+
         for f_num in range(start_frame - num_pad, start_frame):
             tmp_events.append([f_num, start_x, start_y, idx])
-        
+
         for f_num in range(end_frame + 1, end_frame + 1 + num_pad):
             tmp_events.append([f_num, end_x, end_y, idx])
-    
+
     tmp_events = pd.DataFrame(tmp_events, columns=['frame', 'x', 'y', 'particle'])
     tmp_events = tmp_events.sort_values(by=['particle', 'frame'])
     puff_events = puff_events.append(tmp_events, sort=True)
     return puff_events[['frame', 'x', 'y', 'particle']]
 
-# for each event in the movie, fetch the grid of intensity values around the center of the event
-# the grid is of dimension (2*delta + 1)x(2*delta + 1)
-# TODO: Parallelize
-def intensity_grid(f, puff_events, delta=4):
+# helper function for parallel intensity_grid
+def _intensity_grids_for_frame(frame_and_events, max_frames, delta=4):
+    frame = frame_and_events[0]
+    puff_events = frame_and_events[1]
     puff_intensities = []
-    delta = 4
     side = 2*delta + 1
     for f_num, xloc, yloc, idx in np.array(puff_events):
-        y_len, x_len = np.shape(f[f_num])
-        xloc = int(xloc)
-        yloc = int(yloc)
-        
-        # literal edge case detection
-        y_start = (yloc - delta) if (yloc - delta) >= 0 else 0
-        y_end = (yloc + delta + 1) if (yloc + delta) <= y_len else (y_len + 1)
-        x_start = (xloc - delta) if (xloc - delta) >= 0 else 0
-        x_end = (xloc + delta + 1) if (xloc + delta) <= x_len else (x_len + 1)
-        block = f[f_num][y_start:y_end, x_start:x_end]
-        
-        if x_start == 0:
-            block = np.pad(block, ((0,0), ((delta-xloc)+1,0)), mode="reflect")
-        elif x_end == (x_len + 1):
-            block = np.pad(block, ((0,0), (0,delta-(x_len-xloc)+1)), mode="reflect")
-            
-        if y_start == 0:
-            block = np.pad(block, (((delta-yloc)+1,0), (0,0)), mode="reflect")
-        elif y_end == (y_len + 1):
-            block = np.pad(block, ((0,delta-(y_len-yloc)+1), (0,0)), mode="reflect")
-        
+        if (f_num < 0) | (f_num >= max_frames):
+            block = np.zeros((9,9))
+        else:
+            y_len, x_len = np.shape(frame)
+            xloc = int(xloc)
+            yloc = int(yloc)
+
+            # literal edge case detection
+            y_start = (yloc - delta) if (yloc - delta) >= 0 else 0
+            y_end = (yloc + delta + 1) if (yloc + delta) <= y_len else (y_len + 1)
+            x_start = (xloc - delta) if (xloc - delta) >= 0 else 0
+            x_end = (xloc + delta + 1) if (xloc + delta) <= x_len else (x_len + 1)
+            block = frame[y_start:y_end, x_start:x_end]
+
+            if x_start == 0:
+                block = np.pad(block, ((0,0), ((delta-xloc)+1,0)), mode="reflect")
+            elif x_end == (x_len + 1):
+                block = np.pad(block, ((0,0), (0,delta-(x_len-xloc)+1)), mode="reflect")
+
+            if y_start == 0:
+                block = np.pad(block, (((delta-yloc)+1,0), (0,0)), mode="reflect")
+            elif y_end == (y_len + 1):
+                block = np.pad(block, ((0,delta-(y_len-yloc)+1), (0,0)), mode="reflect")
+
         for r,c in product(range(side), repeat=2):
             puff_intensities.append([f_num, c - delta, r - delta, idx, block[r,c]])
-        
+
     puff_intensities = pd.DataFrame(puff_intensities, columns=['frame', 'x', 'y', 'particle', 'intensity'])
     return puff_intensities
-    
+
+# for each event in the movie, fetch the grid of intensity values around the center of the event
+# the grid is of dimension (2*delta + 1)x(2*delta + 1)
+def intensity_grid(f, puff_events, delta=4):
+    frames = np.unique(puff_events['frame'])
+    max_frames = np.shape(f)[0]
+
+    frame_generator = (f[n] if (n >= 0
+                                and n < max_frames)
+                       else 0 for n in frames)
+    frame_events_generator = (puff_events[puff_events['frame'] == n]
+                              for n in frames)
+
+    n_cores = multiprocessing.cpu_count()
+    f_with_options = partial(_intensity_grids_for_frame,
+                             max_frames = max_frames,
+                             delta=delta)
+    with multiprocessing.Pool(3) as pool:
+        grids_out = pool.map(f_with_options,
+                             zip(frame_generator, frame_events_generator),
+                             chunksize=100)
+
+    puff_intensities = pd.concat(grids_out, ignore_index=True)
+    return puff_intensities
+
 
 # the full procedure for processing a movie, from blob detection and particle tracking,
 # through finding intensity grids for each event, and matching puffs to scored data
@@ -380,18 +409,18 @@ def process_movie(movie, markers, num_pad=5, delta=4, save=True):
     events = tp.filter_stubs(events, 4)
     if save:
         events.to_csv(basename(movie) + '_events.csv')
-    
+
     puff_ids = np.array([filter_df(events, m, 5) for m in marker_locs])
     puff_events = events[events['particle'].isin(puff_ids)]
     puff_events = pad_frames(puff_events, puff_ids, f, num_pad)
     puff_intensities = intensity_grid(f, puff_events, delta)
-    
+
     nonpuff_ids = np.setdiff1d(np.unique(events['particle']), puff_ids)
     nonpuff_sample = np.random.choice(nonpuff_ids, 100, replace=False)
     nonpuff_events = events[events['particle'].isin(nonpuff_sample)]
     nonpuff_events = pad_frames(nonpuff_events, nonpuff_sample, f, num_pad)
     nonpuff_intensities = intensity_grid(f, nonpuff_events, delta)
-    
+
     if save:
         puff_intensities.to_csv(basename(movie) + '_puff_intensities.csv')
         puff_events.to_csv(basename(movie) + '_puff_events.csv')
