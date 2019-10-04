@@ -197,23 +197,23 @@ calc_cca_scores <- function(fd_obj, cca_obj, mean1, mean2){
 ### Read in Data ###
 ####################
 
-puff_clusters <- read.csv('0IYVHRNA_clusters_Zara.csv') %>%
-  rbind(read.csv('19CC75ZU_clusters_Zara.csv')) %>%
-  rbind(read.csv('2TZWB6CN_clusters_Zara.csv')) %>%
-  rbind(read.csv('3W70AV4V_clusters_Zara.csv'))
+puff_clusters <- read.csv('data/0IYVHRNA_clusters_Zara.csv') %>%
+  rbind(read.csv('data/19CC75ZU_clusters_Zara.csv')) %>%
+  rbind(read.csv('data/2TZWB6CN_clusters_Zara.csv')) %>%
+  rbind(read.csv('data/3W70AV4V_clusters_Zara.csv'))
 
-puff_events <- read.csv('0IYVHRNA_puff_intensities.csv') %>%
+puff_events <- read.csv('data/0IYVHRNA.tif_puff_intensities.csv') %>%
   mutate(cell = 1) %>%
-  rbind(read.csv('19CC75ZU_puff_intensities.csv') %>% mutate(cell = 2)) %>%
-  rbind(read.csv('2TZWB6CN_puff_intensities.csv') %>% mutate(cell = 3)) %>%
-  rbind(read.csv('3W70AV4V_puff_intensities.csv') %>% mutate(cell = 4)) %>%
+  rbind(read.csv('data/19CC75ZU.tif_puff_intensities.csv') %>% mutate(cell = 2)) %>%
+  rbind(read.csv('data/2TZWB6CN.tif_puff_intensities.csv') %>% mutate(cell = 3)) %>%
+  rbind(read.csv('data/3W70AV4V.tif_puff_intensities.csv') %>% mutate(cell = 4)) %>%
   prepare_data()
 
-nonpuff_events <- read.csv('0IYVHRNA_nonpuff_intensities.csv') %>%
+nonpuff_events <- read.csv('data/0IYVHRNA.tif_nonpuff_intensities.csv') %>%
   mutate(cell = 1) %>%
-  rbind(read.csv('19CC75ZU_nonpuff_intensities.csv') %>% mutate(cell = 2)) %>%
-  rbind(read.csv('2TZWB6CN_nonpuff_intensities.csv') %>% mutate(cell = 3)) %>%
-  rbind(read.csv('3W70AV4V_nonpuff_intensities.csv') %>% mutate(cell = 4)) %>%
+  rbind(read.csv('data/19CC75ZU.tif_nonpuff_intensities.csv') %>% mutate(cell = 2)) %>%
+  rbind(read.csv('data/2TZWB6CN.tif_nonpuff_intensities.csv') %>% mutate(cell = 3)) %>%
+  rbind(read.csv('data/3W70AV4V.tif_nonpuff_intensities.csv') %>% mutate(cell = 4)) %>%
   prepare_data()
 
 

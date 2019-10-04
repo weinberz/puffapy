@@ -10,9 +10,11 @@ from skimage.draw import circle
 from skimage.restoration import denoise_wavelet
 from skimage.feature import peak_local_max
 
-from scipy.ndimage.filters import gaussian_laplace
 from scipy.stats import gumbel_r
 from scipy import spatial
+from scipy import ndimage
+from scipy import stats
+from scipy import signal
 
 import multiprocessing
 
@@ -33,6 +35,12 @@ from itertools import product
 from os.path import basename
 
 from tqdm.auto import tqdm
+
+from lib import analysis
+
+import time
+
+tp.quiet(True)
 
 # Generate necessary R functions first
 # R function for fitting a gumbel GLM to the local maxima in blob detection
@@ -82,7 +90,6 @@ def _compute_disk_overlap(d, r1, r2):
             0.5 * sqrt(abs(a * b * c * d)))
     return area / (math.pi * (min(r1, r2) ** 2))
 
-
 def _compute_sphere_overlap(d, r1, r2):
     """
     Compute volume overlap fraction between two spheres of radii
@@ -107,7 +114,6 @@ def _compute_sphere_overlap(d, r1, r2):
     vol = (math.pi / (12 * d) * (r1 + r2 - d)**2 *
            (d**2 + 2 * d * (r1 + r2) - 3 * (r1**2 + r2**2) + 6 * r1 * r2))
     return vol / (4./3 * math.pi * min(r1, r2) ** 3)
-
 
 def _blob_overlap(blob1, blob2):
     """Finds the overlapping area fraction between two blobs.
@@ -150,7 +156,6 @@ def _blob_overlap(blob1, blob2):
     else:  # http://mathworld.wolfram.com/Sphere-SphereIntersection.html
         return _compute_sphere_overlap(d, r1, r2)
 
-
 def _prune_blobs(blobs_array, overlap=0.5):
     """Eliminated blobs with area overlap.
     Parameters
@@ -187,8 +192,107 @@ def _prune_blobs(blobs_array, overlap=0.5):
 
     return np.array([b for b in blobs_array if b[-1] > 0])
 
+def get_mask(movie, mode_ratio = 0.8, connect = True):
+    """ Gets cell mask from image by thresholding at the minimum after
+    the first mode of fluorescence in a maximum intensity projection of the movie
+    Parameters
+    ----------
+    idx_frame : list
+        A 2-element list, containing the frame number (int) and frame (pims.Frame) to be analysed
+    sigma_list : list
+        A list of ints indicating at sigmas the Laplace-on-Gaussian should be evaluated
+    cutoff: int
+        The quantile at which the fitted distribution of background noise should be thresholded to select
+        specific signal
+    Returns
+    -------
+    bls : pandas.DataFrame
+        DataFrame containing frame number and the y and x coordinates of each blob detected in the frame.
+    """
+    projection = np.amax(movie, axis=0)
+    dim_x, dim_y = np.shape(projection)
+
+    blurred = ndimage.filters.gaussian_filter(projection, 5)
+    linear_blurred = blurred.flatten()
+    percentiles = np.percentile(linear_blurred, [1,99])
+    linear_blurred = np.delete(linear_blurred, [(linear_blurred < percentiles[0]) |
+                                                (linear_blurred < percentiles[1])])
+    intensity_kde = stats.gaussian_kde(linear_blurred)
+    intensity_bins, bin_size = np.linspace(linear_blurred.min(), linear_blurred.max(), 100, retstep=True)
+    intensity_probs = intensity_kde(intensity_bins)
+    local_max = signal.argrelmax(intensity_probs)[0]
+    local_min = signal.argrelmin(intensity_probs)[0]
+
+    if local_min is not None:
+        first_mode_min_id = np.argmax(local_min>local_max[0])
+
+        if ((first_mode_min_id is not None) and 
+            (np.sum(intensity_probs[0:local_min[first_mode_min_id]])*bin_size < mode_ratio)):
+
+            mask = blurred>intensity_bins[local_min[first_mode_min_id]]
+
+            if connect:
+                labeled_img, labels = ndimage.label(mask)
+                biggest_obj = np.argmax(np.bincount(labeled_img[labeled_img>0].flatten()))
+                mask = labeled_img == biggest_obj
+
+        else:
+            mask = np.ones((dim_x, dim_y))
+
+    else:
+        mask = np.ones((dim_x, dim_y))
+
+    return mask
+
+def get_loc_background(frame, sigma = 1.26, alpha = 0.05):
+    frame = frame.astype('float64')
+    window = math.ceil(4*sigma)
+    x = np.arange(-window, window+1)
+    g = np.exp(-x**2/(2.*sigma**2.))
+    u = np.ones((1,len(x)))
+
+    extended_frame = np.pad(frame, window, mode='reflect')
+    fg = signal.convolve2d(g*g.reshape(-1,1), extended_frame, mode='valid')
+    fu = signal.convolve2d(u.reshape(-1,1)*u, extended_frame, mode='valid');
+    fu2 = signal.convolve2d(u.reshape(-1,1)*u, extended_frame**2, mode='valid');
+
+    #2-D kernel
+    g2 = g*g.reshape(-1,1)
+    n = len(g2.flatten());
+    gsum = np.sum(g2.flatten());
+    g2sum = np.sum(g2.flatten()**2);
+
+    # solution to linear system
+    A_est = (fg - gsum*fu/n) / (g2sum - gsum**2/n)
+    c_est = (fu - A_est*gsum)/n
+
+    # filter signic regions
+    J = np.hstack([g2.flatten().reshape(-1,1), np.ones((n,1))])
+    C = np.linalg.inv(np.matmul(J.T,J))
+
+    f_c = fu2 - 2*c_est*fu + n*c_est**2
+    RSS = A_est**2*g2sum - 2*A_est*(fg - c_est*gsum) + f_c
+    RSS[RSS<0] = 0
+    sigma_e2 = RSS/(n-3)
+
+    sigma_A = np.sqrt(sigma_e2*C[0,0])
+
+    sigma_res = np.sqrt(RSS/(n-1))
+
+    kLevel = stats.norm.ppf(1-alpha/2.0)
+
+    SE_sigma_c = sigma_res/np.sqrt(2*(n-1)) * kLevel
+    df2 = (n-1) * (sigma_A**2 + SE_sigma_c**2)**2 / (sigma_A**4 + SE_sigma_c**4)
+    scomb = np.sqrt((sigma_A**2 + SE_sigma_c**2)/n)
+    T = (A_est - sigma_res*kLevel) / scomb
+    pval = stats.t.cdf(-T, df2)
+    mask = pval < alpha
+    return(c_est, mask)
+
 # This is a helper function for parallelizing find_locs
-def _find_locs_in_frame(idx_frame, sigma_list, cutoff):
+def _find_locs_in_frame(idx_frame, sigma_list, cutoff, 
+                        mask=None, filter_points=True,
+                        old_coefs = None):
     """Single frame processor for movies. Denoises, blob detects,
     and calculates background information to identify potential events
     Parameters
@@ -209,35 +313,46 @@ def _find_locs_in_frame(idx_frame, sigma_list, cutoff):
     # the local max values of the laplacian
     idx = idx_frame[0]
     frame = idx_frame[1]
+    background_frame, signif_mask = get_loc_background(frame)
     frame = denoise_wavelet(frame, multichannel=False)
-#   frame = bandpass(frame, 1, 15, 1)
-    gls = [-gaussian_laplace(frame, sig) * sig **2 for sig in sigma_list]
-    plm = [peak_local_max(x) for x in gls]
+    gls = [-ndimage.filters.gaussian_laplace(frame, sig) * sig **2 for sig in sigma_list]
+    
+    if mask is None:
+        mask = np.ones(np.shape(frame))
+    if filter_points:
+        mask = mask * signif_mask
+        
+    plm = [peak_local_max(x, indices=False) for x in gls]
+    plm = [np.transpose(np.nonzero(x & mask))[::-1] for x in plm]
     plmval = np.concatenate([[gls[i][r, c] for (r, c) in plm[i]] for i in range(len(sigma_list))])
     sigmas_of_peaks = np.concatenate([np.repeat(sigma_list[i], len(plm[i])) for i in range(len(sigma_list))])
     plm = np.hstack([np.concatenate(plm), sigmas_of_peaks.reshape(len(sigmas_of_peaks), 1)])
 
-    loc_background = np.zeros(len(plm))
-    for i, loc_max in enumerate(plm):
-        rr, cc = circle(loc_max[0], loc_max[1], 9)
-        cc_new = cc[np.where((0 <= rr) & (rr <= frame.shape[0] - 1) & (0 <= cc) & (cc <= frame.shape[1] - 1))]
-        rr_new = rr[np.where((0 <= rr) & (rr <= frame.shape[0] - 1) & (0 <= cc) & (cc <= frame.shape[1] - 1))]
-        loc_background[i] = np.median(frame[rr_new, cc_new])
-
-    coef = gev_glm(plmval, sigmas_of_peaks, loc_background)
+    loc_background = np.array([background_frame[int(loc_max[0]), int(loc_max[1])] for loc_max in plm])
+    try:
+        coef = gev_glm(plmval, sigmas_of_peaks, loc_background)
+    except rpy2.rinterface.RRuntimeError:
+        if old_coefs is None:
+            raise ValueError()
+        else:
+            coef = old_coefs
+            
     thresh = gumbel_r.ppf(q=cutoff,
                           loc=coef[0] + coef[1]*sigmas_of_peaks + coef[2]*loc_background + coef[3]*sigmas_of_peaks*loc_background,
                           scale=coef[4] +coef[5]*sigmas_of_peaks + coef[6]*loc_background + coef[7]*sigmas_of_peaks*loc_background)
     plm = plm[np.where(plmval > thresh)]
-    bls = _prune_blobs(plm)
+    if np.shape(plm)[0] == 0:
+        return pd.DataFrame([], columns=['frame', 'x', 'y']), coef
+    else:
+        bls = _prune_blobs(plm)
 
-    # record current frame number, rather than the sigma used in blob detection
-    bls[:,2] = idx
+        # record current frame number, rather than the sigma used in blob detection
+        bls[:,2] = idx
 
-    # Important note! blob_log function returns (row, col, sigma)
-    # row corresponds to y and column to x
-    bls = pd.DataFrame(bls, columns=['y', 'x', 'frame'])
-    return bls[['frame', 'x', 'y']]
+        # Important note! blob_log function returns (row, col, sigma)
+        # row corresponds to y and column to x
+        bls = pd.DataFrame(bls, columns=['y', 'x', 'frame'])
+        return bls[['frame', 'x', 'y']], coef
 
 # Function to detect blobs in cell videos
 # Returns a pandas data frame with columns for (x,y) location and frame number (0-indexed) for detected blobs
@@ -249,17 +364,44 @@ def _find_locs_in_frame(idx_frame, sigma_list, cutoff):
 # num_sigma: number of standard deviations to try in blob detection
 # cutoff: the cutoff used to find an intensity threshold
 
-def find_locs(f, max_sigma=3, min_sigma=1, num_sigma=11, cutoff=0.9):
+def find_locs(f, max_sigma=3, min_sigma=1, num_sigma=11, cutoff=0.9, mask=True):
 
     # Generate list of evenly-spaced standard deviations between min_sigma and max_sigma
     scale = np.linspace(0, 1, num_sigma)[:, None]
     sigma_list = scale * (max_sigma - min_sigma) + min_sigma
     sigma_list = sigma_list[:,0]
+    
+    old_coefs = None
+    blobs_out = []
+    for idx_frame in enumerate(f):
+        if mask:
+            f_mask = get_mask(f)
+        else:
+            f_mask = None
+        blobs, old_coefs = _find_locs_in_frame(idx_frame, 
+                                               sigma_list=sigma_list, 
+                                               cutoff=cutoff, 
+                                               mask = f_mask, 
+                                               old_coefs=old_coefs)
+        blobs_out.append(blobs)
 
-    n_cores = multiprocessing.cpu_count()
-    f_with_sigmas = partial(_find_locs_in_frame, sigma_list=sigma_list, cutoff=cutoff)
-    with multiprocessing.Pool(3) as pool:
-        blobs_out = pool.map(f_with_sigmas, enumerate(f), chunksize=100)
+# This is for parallel execution. Doesn't work with old_coefs method
+#     n_cores = multiprocessing.cpu_count()
+
+#     if mask:
+#         f_mask = get_mask(f)
+#         f_with_sigmas = partial(_find_locs_in_frame,
+#                                 sigma_list=sigma_list,
+#                                 cutoff=cutoff,
+#                                 mask=f_mask)
+#         with multiprocessing.Pool(3) as pool:
+#             blobs_out = pool.map(f_with_sigmas, enumerate(f), chunksize=100)
+#     else:
+#         f_with_sigmas = partial(_find_locs_in_frame,
+#                                 sigma_list=sigma_list,
+#                                 cutoff=cutoff)
+#         with multiprocessing.Pool(3) as pool:
+#             blobs_out = pool.map(f_with_sigmas, enumerate(f), chunksize=100)
 
     # To do particle tracking across frames, after calling this function you would run the following:
     #
@@ -297,8 +439,9 @@ def import_xml_data(f):
 # loc is a triple of x coord, y coord, frame number
 def filter_df(df, loc, radius=5):
     # match frame, and match (x,y) coords within radius
-    id_list = df[(np.abs(df['frame'] - (loc[2] - 1)) < 1) &  (np.abs(df['x'] - loc[0]) < radius) &
-       (np.abs(df['y'] - loc[1]) < radius)]['particle'].tolist()
+    id_list = df[(np.abs(df['frame'] - (loc[2] - 1)) < 1) &
+                 (np.abs(df['x'] - loc[0]) < radius) &
+                 (np.abs(df['y'] - loc[1]) < radius)]['particle'].tolist()
     if not id_list:
         return - 1
     return id_list[0]
@@ -401,29 +544,44 @@ def intensity_grid(f, puff_events, delta=4):
 # markers: the name of an XML file containing info for events classified as puffs
 # num_pad: number of frames to add to beginning and end of each event
 # delta: determines grid size when extracting grid of intensities around center of detected event
-def process_movie(movie, markers, num_pad=5, delta=4, save=True):
+def process_movie(movie, markers=None, 
+                  num_pad=5, delta=4, 
+                  save=True):
+    movie_name = basename(movie)
+    
     f = pims.TiffStack(movie)
-    marker_locs = import_xml_data(markers)
-    locs = find_locs(f, cutoff=0.9, max_sigma=3)
-    events = tp.link_df(locs, search_range=3, memory=0)
+    average_f = ndimage.uniform_filter(f[:], size=(5,0,0))
+    if markers is not None:
+        marker_locs = import_xml_data(markers)
+    
+    t_start = time.time()
+    print("Getting events for %s... " % movie_name, end='')
+    locs = find_locs(average_f, cutoff=0.9)
+    events = tp.link_df(locs, search_range=1.5, memory=0)
     events = tp.filter_stubs(events, 4)
+    if markers is not None:
+        puff_ids = np.array([filter_df(events, m, 5) for m in marker_locs])
+        events['puff'] = events['particle'].isin(puff_ids).astype(int)
     if save:
-        events.to_csv(basename(movie) + '_events.csv')
-
-    puff_ids = np.array([filter_df(events, m, 5) for m in marker_locs])
-    puff_events = events[events['particle'].isin(puff_ids)]
-    puff_events = pad_frames(puff_events, puff_ids, f, num_pad)
-    puff_intensities = intensity_grid(f, puff_events, delta)
-
-    nonpuff_ids = np.setdiff1d(np.unique(events['particle']), puff_ids)
-    nonpuff_sample = np.random.choice(nonpuff_ids, 100, replace=False)
-    nonpuff_events = events[events['particle'].isin(nonpuff_sample)]
-    nonpuff_events = pad_frames(nonpuff_events, nonpuff_sample, f, num_pad)
-    nonpuff_intensities = intensity_grid(f, nonpuff_events, delta)
-
+        events.to_csv(basename(movie) + '_events.csv', index=False)
+    t_events = time.time() - t_start
+    print("Finished (%d seconds)" % t_events)
+    
+    print("Getting intensities for %s... " % movie_name, end='')
+    intensities = intensity_grid(f,events[['frame','x','y','particle']])
+    if markers is not None:
+        intensities['puff'] = intensities['particle'].isin(puff_ids).astype(int)
     if save:
-        puff_intensities.to_csv(basename(movie) + '_puff_intensities.csv')
-        puff_events.to_csv(basename(movie) + '_puff_events.csv')
-        nonpuff_intensities.to_csv(basename(movie) + '_nonpuff_intensities.csv')
-        nonpuff_events.to_csv(basename(movie) + '_nonpuff_events.csv')
-    return puff_events, puff_intensities, nonpuff_events, nonpuff_intensities
+        intensities.to_csv(basename(movie) + '_intensities.csv')
+    t_intens = (time.time() - t_start) - t_events
+    print("Finished (%d seconds)" % t_intens)
+    
+    print("Getting features for %s... " % movie_name, end='')
+    features = pandas2ri.ri2py_dataframe(analysis.get_features(intensities))
+    if save:
+        features.to_csv(basename(movie) + '_features.csv')
+        
+    t_features = (time.time() - t_start) - t_intens
+    print("Finished (%d seconds)" % t_features)
+    
+    return events, intensities, features

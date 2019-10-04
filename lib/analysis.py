@@ -14,13 +14,13 @@ with pkg_resources.path('lib', 'puff_pca.rds') as filepath:
     rpy2.robjects.r("puff_pca <- readRDS('" + str(filepath) + "')")
 
 with pkg_resources.path('lib', 'ccafd.rds') as filepath:
-    rpy2.robjects.r("puff_pca <- readRDS('" + str(filepath) + "')")
+    rpy2.robjects.r("ccafd <- readRDS('" + str(filepath) + "')")
 
 with pkg_resources.path('lib', 'puffmeans.Rdata') as filepath:
-    rpy2.robjects.r("load('" + str(filepath) + "')")
+    rpy2.robjects.r["load"](str(filepath))
 
 with pkg_resources.path('lib', 'analysis.R') as filepath:
-    rpy2.robjects.r("source('" + str(filepath) + "')")
+    rpy2.robjects.r["source"](str(filepath))
 
 get_pc_scores = rpy2.robjects.globalenv['get_pc_scores']
 get_features = rpy2.robjects.globalenv['get_features']
