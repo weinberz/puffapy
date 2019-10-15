@@ -33,12 +33,15 @@ get_cca_scores <- function(puff_scores, fcca_obj = ccafd,
   return(cca_scores)
 }
 
-get_features <- function(intensities, frame_length = 0.02) {
+get_features <- function(intensities, frame_length = 0.02,
+                         fpca_obj = puff_pca) {
   events <- prepare_data(intensities)
 
   puff_scores <- get_pc_scores(events)
 
   cca_scores <- get_cca_scores(puff_scores)
+  
+  gof <- cacl_gof(events, puff_scores, fpca_obj)
 
   fluor_scores <- intensities %>%
     group_by(particle) %>%
@@ -58,7 +61,8 @@ get_features <- function(intensities, frame_length = 0.02) {
               randomness_s2 = sum(abs(s2 - smooth2))/n()) %>%
     bind_cols(cca_scores) %>%
     left_join(fluor_scores, by = 'particle') %>%
-    left_join(tau_scores, by = 'particle')
+    left_join(tau_scores, by = 'particle') %>%
+    left_join(gof, by=c("cell", "particle"))
   return(puff_features)
 }
 
@@ -274,4 +278,30 @@ calc_tau <- function(intensity_trace){
   } else {
     return(tau)
   }
+}
+
+# pca goodness of fit for each event
+calc_gof <- function(events, puff_scores, fpca_obj){
+  rads <- events %>%
+    filter(particle == min(particle)) %>%
+    filter(frame == min(frame)) %>%
+    arrange(radius) %>%
+    pull(radius)
+  pc_mean <- as.numeric(eval.fd(fpca_obj$meanfd, rads))
+  pc_eval <- eval.fd(fpca_obj$harmonics, rads)
+  
+  events_resid <- events %>%
+    left_join(puff_scores, by=c("cell", "particle", "frame")) %>%
+    select(cell, particle, frame, radius, intensity, s1, s2, s3) %>%
+    arrange(cell, particle, frame, radius) %>%
+    group_by(cell, particle, frame) %>%
+    mutate(fit = 
+             pc_mean + s1*pc_eval[,1] + 
+             s2*pc_eval[,2] + s3*pc_eval[,3]) %>%
+    ungroup() %>%
+    group_by(cell, particle) %>%
+    summarize(resid_dist = mean(abs(intensity - fit))) %>%
+    ungroup()
+  
+  return(events_resid)
 }
