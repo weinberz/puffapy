@@ -22,5 +22,17 @@ with pkg_resources.path('lib', 'puffmeans.Rdata') as filepath:
 with pkg_resources.path('lib', 'analysis.R') as filepath:
     rpy2.robjects.r["source"](str(filepath))
 
-get_pc_scores = rpy2.robjects.globalenv['get_pc_scores']
-get_features = rpy2.robjects.globalenv['get_features']
+get_pc_scores_r = rpy2.robjects.globalenv['get_pc_scores']
+get_features_r = rpy2.robjects.globalenv['get_features']
+
+def get_features(events, intensities,
+                 dims = ["residuals", "snr"],
+                 stats = ['max','min','mean','median','std']):
+    intens_features = get_features_r(intensities)
+    intens_features = pandas2ri.ri2py_dataframe(intens_features)
+    event_features = events[["particle"] + dims].groupby("particle").agg(stats)
+    event_features.columns = ["_".join(x) for x in event_features.columns.ravel()]
+    
+    features = intens_features.merge(event_features, on="particle")
+    
+    return features

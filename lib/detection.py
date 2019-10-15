@@ -276,7 +276,8 @@ def get_loc_background(frame, sigma = 1.26, alpha = 0.05):
     sigma_e2 = RSS/(n-3)
 
     sigma_A = np.sqrt(sigma_e2*C[0,0])
-
+    
+    # residuals for fitting gaussian of given sigma
     sigma_res = np.sqrt(RSS/(n-1))
 
     kLevel = stats.norm.ppf(1-alpha/2.0)
@@ -287,7 +288,8 @@ def get_loc_background(frame, sigma = 1.26, alpha = 0.05):
     T = (A_est - sigma_res*kLevel) / scomb
     pval = stats.t.cdf(-T, df2)
     mask = pval < alpha
-    return(c_est, mask)
+    snr = A_est/c_est
+    return(c_est, mask, sigma_res, snr)
 
 # This is a helper function for parallelizing find_locs
 def _find_locs_in_frame(idx_frame, sigma_list, cutoff, 
@@ -313,7 +315,7 @@ def _find_locs_in_frame(idx_frame, sigma_list, cutoff,
     # the local max values of the laplacian
     idx = idx_frame[0]
     frame = idx_frame[1]
-    background_frame, signif_mask = get_loc_background(frame)
+    background_frame, signif_mask, residuals, snr = get_loc_background(frame)
     frame = denoise_wavelet(frame, multichannel=False)
     gls = [-ndimage.filters.gaussian_laplace(frame, sig) * sig **2 for sig in sigma_list]
     
@@ -342,7 +344,7 @@ def _find_locs_in_frame(idx_frame, sigma_list, cutoff,
                           scale=coef[4] +coef[5]*sigmas_of_peaks + coef[6]*loc_background + coef[7]*sigmas_of_peaks*loc_background)
     plm = plm[np.where(plmval > thresh)]
     if np.shape(plm)[0] == 0:
-        return pd.DataFrame([], columns=['frame', 'x', 'y']), coef
+        return pd.DataFrame([], columns=['frame', 'x', 'y', 'residuals', 'snr']), coef
     else:
         bls = _prune_blobs(plm)
 
@@ -351,8 +353,10 @@ def _find_locs_in_frame(idx_frame, sigma_list, cutoff,
 
         # Important note! blob_log function returns (row, col, sigma)
         # row corresponds to y and column to x
-        bls = pd.DataFrame(bls, columns=['y', 'x', 'frame'])
-        return bls[['frame', 'x', 'y']], coef
+        bls = pd.DataFrame(bls, columns=['y', 'x', 'frame'], dtype="int16")
+        bls['residuals'] = [residuals[y,x] for y,x in bls[['y','x']].values]
+        bls['snr'] = [snr[y,x] for y,x in bls[['y','x']].values]
+        return bls[['frame', 'x', 'y', 'residuals', 'snr']], coef
 
 # Function to detect blobs in cell videos
 # Returns a pandas data frame with columns for (x,y) location and frame number (0-indexed) for detected blobs
@@ -577,7 +581,7 @@ def process_movie(movie, markers=None,
     print("Finished (%d seconds)" % t_intens)
     
     print("Getting features for %s... " % movie_name, end='')
-    features = pandas2ri.ri2py_dataframe(analysis.get_features(intensities))
+    features = analysis.get_features(events, intensities)
     if save:
         features.to_csv(basename(movie) + '_features.csv')
         

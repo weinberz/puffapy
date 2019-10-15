@@ -19,7 +19,9 @@ get_pc_scores <- function(events, fpca_obj = puff_pca) {
     spread(xy, intensity) %>%
     select(cell, particle, frame) %>%
     distinct() %>%
-    cbind(pca_scores)
+    cbind(pca_scores) %>%
+    mutate(smooth1 = ksmooth(frame, s1, bandwidth = 10, x.points=frame)$y,
+           smooth2 = ksmooth(frame, s2, bandwidth = 10, x.points=frame)$y)
   return(puff_scores)
 }
 
@@ -51,7 +53,9 @@ get_features <- function(intensities, frame_length = 0.02) {
     group_by(cell, particle) %>%
     summarize(conv_perim = convhulln(cbind(s1, s2), options="FA")$area,
               conv_area = convhulln(cbind(s1, s2), options="FA")$vol,
-              lifetime_s = n()*frame_length) %>%
+              lifetime_s = n()*frame_length,
+              randomness_s1 = sum(abs(s1 - smooth1))/n(),
+              randomness_s2 = sum(abs(s2 - smooth2))/n()) %>%
     bind_cols(cca_scores) %>%
     left_join(fluor_scores, by = 'particle') %>%
     left_join(tau_scores, by = 'particle')
