@@ -3,6 +3,7 @@ suppressMessages(library(dplyr))
 suppressMessages(library(tidyr))
 suppressMessages(library(fda))
 suppressMessages(library(MASS))
+suppressMessages(library(pracma))
 select <- dplyr::select
 
 ### Functions for Scoring ###
@@ -41,16 +42,16 @@ get_features <- function(intensities, frame_length = 0.02,
 
   cca_scores <- get_cca_scores(puff_scores)
   
-  gof <- cacl_gof(events, puff_scores, fpca_obj)
+  gof <- calc_gof(events, puff_scores, fpca_obj)
 
   fluor_scores <- intensities %>%
+    filter(x >= -1, y >= -1, x <= 1, y <= 1) %>%
     group_by(particle) %>%
-    summarize(deltaf = max(intensity)/min(intensity))
-
-  tau_scores <- intensities %>%
-    filter(x == 0, y == 0) %>%
-    group_by(particle) %>%
-    summarize(tau = calc_tau(intensity) * frame_length)
+    summarize(tau = calc_tau(intensity) * frame_length,
+              plateau = sum(intensity >= 0.9*max(intensity))*frame_length,
+              intden = trapz(linspace(0, frame_length * (n() - 1), n=n()),
+                             intensity),
+              deltaf = max(intensity)/min(intensity))
 
   puff_features <- puff_scores %>%
     group_by(cell, particle) %>%
@@ -58,10 +59,10 @@ get_features <- function(intensities, frame_length = 0.02,
               conv_area = convhulln(cbind(s1, s2), options="FA")$vol,
               lifetime_s = n()*frame_length,
               randomness_s1 = sum(abs(s1 - smooth1))/n(),
-              randomness_s2 = sum(abs(s2 - smooth2))/n()) %>%
+              randomness_s2 = sum(abs(s2 - smooth2))/n(),
+              delta_s2 = max(smooth2)/min(smooth2)) %>%
     bind_cols(cca_scores) %>%
     left_join(fluor_scores, by = 'particle') %>%
-    left_join(tau_scores, by = 'particle') %>%
     left_join(gof, by=c("cell", "particle"))
   return(puff_features)
 }

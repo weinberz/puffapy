@@ -441,9 +441,9 @@ def import_xml_data(f):
 # or return -1 if we can't find it in the matlab data
 # df should be a pandas data frame
 # loc is a triple of x coord, y coord, frame number
-def filter_df(df, loc, radius=5):
+def filter_df(df, loc, radius=5, frame_offset=1):
     # match frame, and match (x,y) coords within radius
-    id_list = df[(np.abs(df['frame'] - (loc[2] - 1)) < 1) &
+    id_list = df[(np.abs(df['frame'] - (loc[2] - 1)) < frame_offset) &
                  (np.abs(df['x'] - loc[0]) < radius) &
                  (np.abs(df['y'] - loc[1]) < radius)]['particle'].tolist()
     if not id_list:
@@ -550,7 +550,8 @@ def intensity_grid(f, puff_events, delta=4):
 # delta: determines grid size when extracting grid of intensities around center of detected event
 def process_movie(movie, markers=None, 
                   num_pad=5, delta=4, 
-                  save=True):
+                  save=True,
+                  outdir = ''):
     movie_name = basename(movie)
     
     f = pims.TiffStack(movie)
@@ -567,7 +568,7 @@ def process_movie(movie, markers=None,
         puff_ids = np.array([filter_df(events, m, 5) for m in marker_locs])
         events['puff'] = events['particle'].isin(puff_ids).astype(int)
     if save:
-        events.to_csv(basename(movie) + '_events.csv', index=False)
+        events.to_csv(outdir + basename(movie) + '_events.csv', index=False)
     t_events = time.time() - t_start
     print("Finished (%d seconds)" % t_events)
     
@@ -576,16 +577,16 @@ def process_movie(movie, markers=None,
     if markers is not None:
         intensities['puff'] = intensities['particle'].isin(puff_ids).astype(int)
     if save:
-        intensities.to_csv(basename(movie) + '_intensities.csv')
+        intensities.to_csv(outdir + basename(movie) + '_intensities.csv')
     t_intens = (time.time() - t_start) - t_events
     print("Finished (%d seconds)" % t_intens)
     
     print("Getting features for %s... " % movie_name, end='')
     features = analysis.get_features(events, intensities)
     if save:
-        features.to_csv(basename(movie) + '_features.csv')
+        features.to_csv(outdir + basename(movie) + '_features.csv')
         
-    t_features = (time.time() - t_start) - t_intens
+    t_features = ((time.time() - t_start) - t_intens) - t_events
     print("Finished (%d seconds)" % t_features)
     
     return events, intensities, features

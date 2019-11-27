@@ -35,4 +35,8 @@ def get_features(events, intensities,
     
     features = intens_features.merge(event_features, on="particle")
     
+    if 'puff' in events.columns:
+        puff_ids = events.loc[events['puff']==1,'particle'].values
+        features.loc[:, 'puff'] = features['particle'].isin(puff_ids).astype(int)
+        
     return features
