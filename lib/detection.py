@@ -4,6 +4,8 @@ from rpy2.robjects import pandas2ri
 numpy2ri.activate()
 pandas2ri.activate()
 
+import matplotlib.pyplot as plt
+
 import importlib.resources as pkg_resources 
 
 from skimage.draw import circle
@@ -237,10 +239,10 @@ def get_mask(movie, mode_ratio = 0.8, connect = True):
                 mask = labeled_img == biggest_obj
 
         else:
-            mask = np.ones((dim_x, dim_y))
+            mask = np.ones((dim_x, dim_y), dtype=bool)
 
     else:
-        mask = np.ones((dim_x, dim_y))
+        mask = np.ones((dim_x, dim_y), dtype=bool)
 
     return mask
 
@@ -294,7 +296,7 @@ def get_loc_background(frame, sigma = 1.26, alpha = 0.05):
 # This is a helper function for parallelizing find_locs
 def _find_locs_in_frame(idx_frame, sigma_list, cutoff, 
                         mask=None, filter_points=True,
-                        old_coefs = None):
+                        old_coefs=None):
     """Single frame processor for movies. Denoises, blob detects,
     and calculates background information to identify potential events
     Parameters
@@ -320,7 +322,8 @@ def _find_locs_in_frame(idx_frame, sigma_list, cutoff,
     gls = [-ndimage.filters.gaussian_laplace(frame, sig) * sig **2 for sig in sigma_list]
     
     if mask is None:
-        mask = np.ones(np.shape(frame))
+        mask = np.ones(np.shape(frame), dtype=bool)
+
     if filter_points:
         mask = mask * signif_mask
         
@@ -338,7 +341,7 @@ def _find_locs_in_frame(idx_frame, sigma_list, cutoff,
             raise ValueError()
         else:
             coef = old_coefs
-            
+    
     thresh = gumbel_r.ppf(q=cutoff,
                           loc=coef[0] + coef[1]*sigmas_of_peaks + coef[2]*loc_background + coef[3]*sigmas_of_peaks*loc_background,
                           scale=coef[4] +coef[5]*sigmas_of_peaks + coef[6]*loc_background + coef[7]*sigmas_of_peaks*loc_background)
