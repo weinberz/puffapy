@@ -4,8 +4,6 @@ from rpy2.robjects import pandas2ri
 numpy2ri.activate()
 pandas2ri.activate()
 
-import matplotlib.pyplot as plt
-
 import importlib.resources as pkg_resources 
 
 from skimage.draw import circle
